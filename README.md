@@ -123,8 +123,8 @@ flowchart LR
     A[y_k, u_k<br/>from TEP] --> B[Compute<br/>T²_k and Q_k]
     B --> C{T²_k > J_T²<br/>AND Q_k > J_Q?}
     C -->|No — I_k = 0| D[Use measured<br/>sensor values]
-    C -->|Yes — I_k = 1| E[Compute residuals<br/>r_i,k per sensor]
-    E --> F{||r_i,k|| > ε_i?}
+    C -->|Yes, I_k=1| E[Compute residuals<br/>r_i,k per sensor]
+    E --> F{"norm(r_i,k) > ε_i?"}
     F -->|No| G[Sensor intact]
     F -->|Yes — Q_i,k = 1| H[Sensor compromised<br/>m_i,k = 1]
     H --> I[Reconfigure:<br/>y_i,k ≈ ỹ_i,k − r_i,k]
