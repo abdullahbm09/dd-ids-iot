@@ -13,222 +13,242 @@ A. B. Masood, A. Hasan, V. Vassiliou, M. Lestas, *"A Blockchain-Based Data-Drive
 
 ## The Problem
 
-Industrial Internet of Things (IIoT) smart factories depend on sensor networks for process control. When sensors are compromised by False Data Injection (FDI) attacks — bias or static attacks — control systems receive corrupted measurements. The consequences are direct: incorrect robotic operations, degraded product quality, unsafe process conditions, and financial loss.
+IIoT smart factories depend on sensor networks for real-time process control. When sensors are compromised by **False Data Injection (FDI) attacks**, controllers receive corrupted measurements — causing unsafe operations, defective production, and equipment damage.
 
-Traditional intrusion detection systems have two unresolved problems:
+Traditional Data-Driven Fault-Tolerant Controllers (DD-FTCs) have two unresolved vulnerabilities:
 
-1. **Detection alone is insufficient.** Detecting an attack without reconfiguring around it still results in degraded process performance during the attack window.
-2. **Threshold manipulation.** Attackers who gain access to the IDS can modify detection thresholds, generating false negatives. The thresholds themselves are unprotected.
+1. **Threshold manipulation** — an attacker who gains access to the IDS can modify the detection thresholds (J_T², J_Q, ε_i), generating false negatives and running attacks undetected indefinitely
+2. **Data log integrity** — without a trust anchor, the integrity of process data used for big data analytics cannot be guaranteed
 
-This work addresses both by embedding the detection, identification, and reconfiguration logic inside an **Ethereum smart contract** — making threshold values immutable and cryptographically tamper-proof.
-
----
-
-## What This Framework Does
-
-The **BB-DD-FTC (Blockchain-Based Data-Driven Fault-Tolerant Controller)** is a closed-loop framework that:
-
-1. **Detects** sensor integrity attacks in real-time using PCA with Hotelling's T² and Q (SPE) statistics
-2. **Identifies** which specific sensor has been compromised using NNARX observer models and residual analysis
-3. **Reconfigures** by computing an approximation of the true sensor measurement and feeding it to the controller
-4. **Secures** all detection thresholds and reconfiguration logic in an Ethereum smart contract — immutable and auditable
-
-![BB-DD-FTC Framework Signal Flow](assets/bb-dd-ftc-framework.png)
+This work embeds the detection, identification, and reconfiguration logic inside an **Ethereum smart contract** — making thresholds immutable and the entire control loop cryptographically verifiable.
 
 ---
 
 ## System Architecture
 
-The framework operates within a three-tier IIoT smart factory model:
-
-```mermaid
-graph TB
-    subgraph Physical["Physical Layer — Industrial Plant"]
-        PLANT[Tennessee Eastman Process<br/>Reactor · Condenser · Separator<br/>Stripper · Compressor]
-        SENSORS[41 sensor outputs<br/>12 manipulated variables]
-        ACTUATORS[Control actuators]
-    end
-
-    subgraph Edge["Edge Layer — Edge Servers"]
-        OBSERVER[NNARX Observer Models<br/>Virtual sensors for RL, RP, RT]
-        PCA[PCA Module<br/>Hotelling T² · Q statistics]
-        THRESHOLD[Online threshold<br/>computation]
-        API[Python API<br/>web3py · JSON-RPC]
-    end
-
-    subgraph Chain["Blockchain Layer — Ethereum Private Testnet"]
-        SC[Smart Contract<br/>Detection · Identification<br/>Reconfiguration]
-        LEDGER[Immutable ledger<br/>keccak256 encrypted<br/>data vectors]
-    end
-
-    PLANT -->|measurements yk, uk| OBSERVER
-    PLANT -->|measurements yk, uk| PCA
-    PCA -->|T²k, Qk| API
-    OBSERVER -->|predicted ŷk| API
-    API -->|encrypted data vector| SC
-    SC -->|reconfigured yk| API
-    API -->|true measurements| ACTUATORS
-    ACTUATORS --> PLANT
-    SC --> LEDGER
-```
+The framework targets a three-tier IIoT smart factory model:
 
 ![Smart Factory Architecture](assets/smart-factory-architecture.png)
 
+```mermaid
+graph TB
+    subgraph PAS["Process Automation System (PAS)"]
+        subgraph L1["Physical Layer — Industrial Plant"]
+            TEP[Tennessee Eastman Process<br/>Reactor · Condenser · Separator<br/>Stripper · Compressor]
+            SENS[52 inputs: 41 outputs + 11 manipulated vars]
+        end
+        subgraph L2["Edge Layer — Edge Servers"]
+            OBS[NNARX Observer Models<br/>Virtual sensors for R_L, R_P, R_T]
+            PCA_MOD[PCA Module<br/>T² and Q statistics]
+            API[Python API · web3py · JSON-RPC]
+        end
+        subgraph L3["Blockchain Layer — Ethereum Clique PoA"]
+            SC[Smart Contract<br/>Detection · Identification · Reconfiguration<br/>Immutable thresholds J_T², J_Q, ε_i]
+            LEDGER[keccak256 encrypted<br/>immutable data log]
+        end
+    end
+
+    TEP -->|y_k, u_k| OBS & PCA_MOD
+    PCA_MOD & OBS -->|T²_k, Q_k, ŷ_k| API
+    API -->|signed transaction| SC
+    SC -->|true measurements| API
+    API -->|reconfigured y_k| TEP
+    SC --> LEDGER
+```
+
 ---
 
-## The DD-IDS: Detection Methodology
+## The BB-DD-FTC Framework
 
-The intrusion detection component uses **Principal Component Analysis (PCA)** combined with **Hotelling's T²** and **Q (Squared Prediction Error)** statistics to detect anomalous sensor behaviour.
+![BB-DD-FTC Signal Flow](assets/bb-dd-ftc-signal-flow.png)
 
-### Step 1: Offline Training (PCA Model)
+The framework has four modules:
 
-Given a clean training dataset Z ∈ ℝ^(N×w):
+**1 — Industrial Control System (ICS):** The Tennessee Eastman Process simulation (MATLAB/Simulink) provides the 52-component input vector at each sampling instant.
+
+**2 — Off-Chain Tasks (Edge Server):** Collects y_k and u_k, computes T²_k and Q_k online, generates one-step predictions from trained NNARX observers, transmits data vector to blockchain.
+
+**3 — Blockchain Interface (Python API):** Converts floating-point values to integers, applies keccak256 encryption, creates signed transactions, relays true measurements back to controllers.
+
+**4 — Ethereum Smart Contract:** Executes detection, identification, and reconfiguration at each sample instant. Stores results immutably. Thresholds are set at deployment and cannot be modified.
+
+---
+
+## Detection Methodology (DD-IDS)
+
+### PCA Training (Offline)
+
+Given clean training data Z ∈ ℝ^(N×w) with N samples and w = 52 process variables:
 
 ```
-1. Normalise Z to zero mean, unit variance
-2. Compute covariance: S = (1/N-1) × Z^T × Z = VΛV^T
-3. Select c principal components explaining ≥ 85-95% variance
-4. Partition: V = [V_pc | V_res], Λ = diag(Λ_pc, Λ_res)
+1. Normalise Z → zero mean, unit variance
+2. Eigenvalue decomposition: S = (1/N-1) × Z^T × Z = V Λ V^T
+3. Select c components: Σλ_i / Σλ_j × 100% ≥ threshold
+4. Partition: V = [V_pc | V_res],  Λ = diag(Λ_pc, Λ_res)
 5. Compute offline thresholds J_T² and J_Q at significance level α
 ```
 
-### Step 2: Online Detection
+### Online Detection
 
-For each new sample z_k:
-
-```
-T²_k = z^T_k × V_pc × Λ^-1_pc × V^T_pc × z_k     (Hotelling T²)
-Q_k  = z^T_k × V_res × V^T_res × z_k               (SPE / Q statistic)
-
-Attack flag: I_k = 1  if T²_k > J_T² AND Q_k > J_Q
-             I_k = 0  otherwise
-```
-
-### Step 3: Attack Identification (NNARX Observer)
-
-When I_k = 1, identify the compromised sensor:
+For each new sample z_k at time k:
 
 ```
-φ_k = [y_{k-1}, ..., y_{k-nA}, u_{k-1}, ..., u_{k-nB}]^T   (regression vector)
-ŷ_k = p(φ_k, γ)                                               (one-step prediction)
-r_{i,k} = y_{i,k} - ŷ_{i,k}                                  (residual for sensor i)
+T²_k = z^T_k · V_pc · Λ^-1_pc · V^T_pc · z_k     # Hotelling T² statistic
+Q_k  = z^T_k · V_res · V^T_res · z_k               # Q (SPE) statistic
 
-Q_{i,k} = 1  if ||r_{i,k}|| > ε_i    (sensor i compromised)
+I_k = 1  if T²_k > J_T² AND Q_k > J_Q             # Attack detected
+    = 0  otherwise
+```
+
+### Sensor Identification (NNARX Observer)
+
+```
+φ_k = [y_{k-1}, ..., y_{k-nA}, u_{k-1}, ..., u_{k-nB}]^T   # regression vector
+ŷ_k = p(φ_k, γ)                                               # one-step prediction
+r_{i,k} = y_{i,k} - ŷ_{i,k}                                  # residual for sensor i
+
+Q_{i,k} = 1  if ||r_{i,k}|| > ε_i     # sensor i compromised
          = 0  otherwise
 ```
 
-### Step 4: Reconfiguration
+### Reconfiguration
 
 ```
-ỹ_{i,k} = y_{i,k}  if Q_{i,k} = 0   (use measured value)
-         = ŷ_{i,k}  if Q_{i,k} = 1   (use predicted value)
+m_{i,k} = Q_{i,k} AND I_k                        # flag: attack confirmed on sensor i
+y_{i,k} ≈ ỹ_{i,k} - r_{i,k} · m_{i,k}           # true measurement (reconfigured)
 ```
-
-The reconfiguration computes the true sensor reading: `y_{i,k} ≈ ỹ_{i,k} − r_{i,k} · m_{i,k}`
-
-All three operations (Detection, Identification, Reconfiguration) are encoded in the smart contract — thresholds J_T², J_Q, and ε_i are set at deployment and cannot be modified.
 
 ```mermaid
 flowchart LR
-    A[New sample z_k] --> B[Compute T²_k and Q_k]
-    B --> C{T²_k > J_T² \nAND Q_k > J_Q?}
-    C -->|No — I_k = 0| D[Use measured\nsensor values]
-    C -->|Yes — I_k = 1| E[Compute residuals\nr_i,k for each sensor]
+    A[y_k, u_k<br/>from TEP] --> B[Compute<br/>T²_k and Q_k]
+    B --> C{T²_k > J_T²<br/>AND Q_k > J_Q?}
+    C -->|No — I_k = 0| D[Use measured<br/>sensor values]
+    C -->|Yes — I_k = 1| E[Compute residuals<br/>r_i,k per sensor]
     E --> F{||r_i,k|| > ε_i?}
-    F -->|No| G[Sensor i intact]
-    F -->|Yes — Q_i,k = 1| H[Sensor i compromised]
-    H --> I[Reconfigure:\nuse ŷ_i,k from observer]
-    I --> J[Submit to blockchain\nvia Python API]
-    J --> K[Smart contract\nvalidates and stores]
-    K --> L[Return true measurements\nto controller]
-```
-
----
-
-## Blockchain Integration
-
-### Why Blockchain?
-
-The smart contract provides properties that a conventional software IDS cannot:
-
-| Property | Conventional IDS | BB-DD-FTC |
-|----------|-----------------|-----------|
-| Threshold tamper-resistance | ✗ Modifiable | ✓ Immutable once deployed |
-| Audit trail | Partial | ✓ Full, cryptographically signed |
-| Data integrity | Trust-based | ✓ keccak256 encrypted + signed |
-| Reconfiguration response | Centralised | ✓ Decentralised, verifiable |
-| DoS resilience | Vulnerable | ✓ PoA consensus survives node failures |
-
-### Ethereum Private Testnet (Clique PoA)
-
-- **Consensus:** Clique Proof-of-Authority — low latency, energy-efficient, suitable for ICS sampling times (3 min in this work)
-- **Smart contract language:** Solidity
-- **Interface:** Python API using web3py via JSON-RPC
-- **Encryption:** keccak256 hash for all data vectors
-
-```mermaid
-sequenceDiagram
-    participant ICS as ICS (TE Process)
-    participant ES as Edge Server
-    participant API as Python API
-    participant BC as Ethereum Smart Contract
-
-    ICS->>ES: Sensor measurements yk, uk
-    ES->>ES: Compute T²k, Qk (offline model)
-    ES->>ES: Generate ŷk (NNARX observer)
-    ES->>API: Data vector [T²k, Qk, uk, yk, ŷk]
-    API->>API: Convert floats → integers
-    API->>API: keccak256 encryption → transign
-    API->>BC: Signed transaction
-    BC->>BC: DETECTION: compare T²k, Qk with JT², JQ
-    BC->>BC: IDENT: compute residuals, check Qi,k flags
-    BC->>BC: RECON: compute true yk for compromised sensors
-    BC-->>API: True sensor measurements
-    API-->>ES: Reconverted measurements
-    ES-->>ICS: Correct measurements to controllers
+    F -->|No| G[Sensor intact]
+    F -->|Yes — Q_i,k = 1| H[Sensor compromised<br/>m_i,k = 1]
+    H --> I[Reconfigure:<br/>y_i,k ≈ ỹ_i,k − r_i,k]
+    I --> J[Blockchain API:<br/>keccak256 + sign]
+    J --> K[Smart contract<br/>validates + stores]
+    K --> L[Return true y_k<br/>to controllers]
 ```
 
 ---
 
 ## Dataset: Tennessee Eastman Process (TEP)
 
-The **Tennessee Eastman Process** is the standard ICS benchmark for process control and security research.
+![TEP Process Flow](assets/tep-process-flow.png)
 
-![TEP Architecture](assets/tep-process-overview.png)
+The TEP is the standard benchmark for ICS security research — a simulated continuous chemical plant with five major units.
 
 | Parameter | Value |
 |-----------|-------|
 | Components | Reactor, Condenser, Separator, Stripper, Compressor |
 | Outputs | 41 measurements |
-| Inputs | 12 manipulated variables (11 used — agitator excluded in mode 3) |
-| States | 50 |
+| Manipulated variables | 11 (12th excluded in mode 3) |
+| Symptom input vector | 52 components |
 | Operation mode | Mode 3 |
 | Sampling time | 3 minutes |
 | Simulation duration | 48 hours = 960 samples |
-| Simulation platform | MATLAB/Simulink |
+| Subsystems evaluated | Reactor Liquid Level (R_L), Pressure (R_P), Temperature (R_T) |
+| Set points | R_L: 65%, R_P: 2800 Pa, R_T: 121.9°C |
 
-**Subsystems evaluated:** Reactor Liquid Level (R_L), Reactor Pressure (R_P), Reactor Temperature (R_T)
+**Observer model performance (NNARX with ANN-LM):**
 
-**Attack types evaluated:**
-- **Bias attack:** `ỹ_{i,k} = y_{i,k} + b_{i,k}` — gradually biased sensor reading
-- **Static attack:** `ỹ_{i,k} = c_i` — fixed false value injected continuously
+| Sensor | MSE Training | MSE Testing |
+|--------|-------------|-------------|
+| Liquid Level (R_L) | 0.0264 | 0.0323 |
+| Pressure (R_P) | 0.0045 | 0.0051 |
+| Temperature (R_T) | 0.0158 | 0.0161 |
+
+---
+
+## Experiments: 9 Attack Scenarios
+
+Six bias attacks and three static attacks were simulated across all three reactor sensors.
+
+| # | Type | Sensor | t₁ | t₂ | Parameters |
+|---|------|--------|----|----|------------|
+| 1 | Bias | R_L | 440 | 480 | A = −1 |
+| 2 | Bias | R_P | 420 | 540 | A = +20 |
+| 3 | Bias | R_T | 440 | 540 | A = −0.5 |
+| 4 | Bias | R_L | 460 | 540 | A = −0.05 / +0.05 (alternating at midpoint) |
+| 5 | Bias | R_P | 420 | 580 | A = −0.375 / +0.375 (alternating at midpoint) |
+| 6 | Bias | R_T | 420 | 540 | A = −0.06 / +0.06 (alternating at midpoint) |
+| 7 | Static | R_L | 420 | 500 | o = 65, η ~ N(0, 0.01) |
+| 8 | Static | R_P | 420 | 500 | o = 2785, η ~ N(0, 0.1) |
+| 9 | Static | R_T | 400 | 420 | o = 121.9, η ~ N(0, 0.001) |
 
 ---
 
 ## Results
 
-The BB-DD-FTC successfully detects and mitigates both attack types across all three reactor subsystems.
+### Attack 1 — Bias Attack on R_L (Reactor Liquid Level)
 
-![Attack Detection Results](assets/attack-detection-results.png)
-![Attack Mitigation Results](assets/attack-mitigation-results.png)
+| | R_L | R_P | R_T |
+|-|-----|-----|-----|
+| **Normal (IAE)** | 1.0030 | 3.5523 | 0.0627 |
+| **Attacked (IAE)** | 2.0672 | 4.7191 | 0.1908 |
+| **Mitigated (IAE)** | 1.5969 | 8.2962 | 0.1450 |
 
-Key results (Attack 8 — R_T sensor, static attack):
-- T² and Q statistics both exceed thresholds at attack onset → I_k = 1 immediately
-- Correct sensor identified via residual analysis
-- Reconfigured measurements (dotted line) follow true process trajectory closely
-- IAE (Integral Absolute Error) bounded within acceptable limits throughout attack window
+![Attack 1 — R_L Time Response](assets/attack1-rl-response.png)
 
-**Security analysis confirms resistance to:** Spoof, Sybil, Replay, DoS/DDoS, Majority, MITM, and Vulnerability attacks by virtue of the private permissioned PoA blockchain architecture.
+![Attack 1 — T² and Q Detection Statistics](assets/attack1-bias-detection-stats.png)
+
+Both T² and Q statistics exceed their thresholds immediately at attack onset. The framework detects the attack, identifies R_L as the compromised sensor, and reconfigures — maintaining stable process operation throughout.
+
+---
+
+### Attack 8 — Static Attack on R_P (Reactor Pressure)
+
+This is the most impactful attack in the test set. A static value of 2785 Pa (vs set point 2800 Pa) is injected with Gaussian noise, forcing a persistent 0.5% deviation.
+
+| | R_L | R_P | R_T |
+|-|-----|-----|-----|
+| **Normal (IAE)** | 1.7002 | 7.0692 | 0.1293 |
+| **Attacked (IAE)** | 1.8342 | **134.7522** | 0.4355 |
+| **Mitigated (IAE)** | 2.1156 | 55.3769 | 0.3157 |
+
+**Pressure IAE reduced by 59% under mitigation** (134.75 → 55.38).
+
+![Attack 8 — R_P Time Response](assets/attack8-rp-response.png)
+
+![Attack 8 — T² and Q Detection Statistics](assets/attack8-static-detection-stats.png)
+
+---
+
+### Full IAE Results — All 9 Attacks
+
+| # | Type | Sensor | Metric | Normal | Attacked | Mitigated |
+|---|------|--------|--------|--------|----------|-----------|
+| 1 | Bias | R_L | R_L | 1.0030 | 2.0672 | 1.5969 |
+| 2 | Bias | R_P | R_P | 10.8784 | 121.7408 | 47.2517 |
+| 3 | Bias | R_T | R_T | 0.2004 | 2.5707 | 1.5739 |
+| 4 | Bias | R_L | R_L | 1.8295 | 5.6019 | 3.0852 |
+| 5 | Bias | R_P | R_P | 15.0128 | 124.0093 | 77.6022 |
+| 6 | Bias | R_T | R_T | 0.2393 | 1.8871 | 1.3376 |
+| 7 | Static | R_L | R_L | 1.7002 | 3.2691 | 2.9327 |
+| 8 | Static | R_P | R_P | 7.0692 | 134.7522 | 55.3769 |
+| 9 | Static | R_T | R_T | 0.0540 | 0.9882 | 0.6437 |
+
+**In every attack scenario, the mitigated IAE is substantially lower than the attacked IAE**, confirming that the reconfiguration mechanism successfully reduces attack impact across all sensor types and attack strategies.
+
+---
+
+## Blockchain Security Properties
+
+The smart contract enforces security guarantees that conventional software IDS cannot provide:
+
+| Threat | Protection mechanism |
+|--------|---------------------|
+| Threshold manipulation | J_T², J_Q, ε_i set at deployment — no setter functions exist |
+| Data tampering | keccak256 encrypted + digitally signed transactions |
+| Spoof attack | Private permissioned PoA — identities defined in genesis block |
+| Sybil attack | Pre-authenticated nodes only — fake identities impossible |
+| Replay attack | Unique transaction ID + timestamp per sampling instant |
+| Non-repudiation | Private key signature on every data vector |
+| Majority attack | 51% node control required in PoA — harder than PoW computational power |
+| DoS/DDoS | PoA automatically removes unavailable authority nodes |
 
 ---
 
@@ -236,20 +256,20 @@ Key results (Attack 8 — R_T sensor, static attack):
 
 ```
 dd-ids-iot/
-├── README.md                    ← This file
-├── assets/                      ← Figures from thesis
-│   ├── bb-dd-ftc-framework.png  ← Framework signal flow diagram
-│   ├── smart-factory-architecture.png
-│   ├── tep-process-overview.png
-│   ├── attack-detection-results.png
-│   └── attack-mitigation-results.png
-├── src/                         ← Core implementation
-│   ├── dd_ids.py                ← PCA + T² + Q detection module
-│   ├── observer.py              ← NNARX observer model interface
-│   └── blockchain_api.py        ← Python API for Ethereum (web3py)
+├── README.md
+├── assets/                              ← Figures from Overleaf thesis source
+│   ├── smart-factory-architecture.png   ← Three-layer IIoT smart factory model
+│   ├── bb-dd-ftc-signal-flow.png        ← Framework signal flow block diagram
+│   ├── tep-process-flow.png             ← Tennessee Eastman Process overview
+│   ├── attack1-bias-detection-stats.png ← T² and Q stats — bias attack on R_L
+│   ├── attack1-rl-response.png          ← R_L sensor response — attack 1
+│   ├── attack8-static-detection-stats.png ← T² and Q stats — static attack on R_P
+│   └── attack8-rp-response.png          ← R_P sensor response — attack 8
+├── src/
+│   ├── dd_ids.py                        ← PCA + T²/Q detection, identification, reconfiguration
+│   └── blockchain_api.py                ← Python API for Ethereum (web3py)
 └── docs/
-    ├── smart-contract.md        ← Smart contract design (Algorithm 3)
-    └── delay-analysis.md        ← Network calculus delay bounds
+    └── smart-contract.md                ← Smart contract design (Solidity algorithms)
 ```
 
 ---
@@ -257,23 +277,23 @@ dd-ids-iot/
 ## Dependencies
 
 ```bash
-# Python (off-chain tasks and blockchain interface)
+# Python
 pip install web3 numpy scipy scikit-learn matplotlib
 
 # MATLAB (simulation — TE process model)
-# Requires: MATLAB R2021b+, Simulink, System Identification Toolbox
+# Requires: MATLAB R2021b+, Simulink, System Identification Toolbox, Neural Network Toolbox
 
-# Blockchain (private testnet)
-# Ethereum Go client: geth
-# Clique PoA configuration required
+# Blockchain
+# geth (Go Ethereum) for private testnet
+# Clique PoA genesis configuration required
 ```
 
 ---
 
 ## Related Work
 
-- **BlockDRL:** `[link]` — Blockchain-Driven Deep Reinforcement Learning for computation offloading and storage in smart factories (Chapter 5 of this thesis, submitted IEEE IoT Journal 2024)
-- **Cloud-Robotics Red Team Assessment:** [`cloud-robotics-redteam`](https://github.com/abdullahbm09/cloud-robotics-redteam) — Offensive security evaluation of a cloud-robotic IIoT environment, including adversarial AI attacks on deployed ML models
+- **BlockDRL** — Blockchain-Driven Deep Reinforcement Learning for computation offloading and data storage placement in smart factories (Chapter 5 of thesis, submitted IEEE IoT Journal 2024)
+- **Cloud-Robotics Red Team Assessment** — [`cloud-robotics-redteam`](https://github.com/abdullahbm09/cloud-robotics-redteam) — Full offensive security engagement against a cloud-robotic IIoT manufacturing environment
 
 ---
 
@@ -281,14 +301,14 @@ pip install web3 numpy scipy scikit-learn matplotlib
 
 ```bibtex
 @article{masood2023blockchain,
-  title={A Blockchain-Based Data-Driven Fault-Tolerant Control System for Smart Factories in Industry 4.0},
-  author={Masood, Abdullah Bin and Hasan, Ammar and Vassiliou, Vasos and Lestas, Marios},
-  journal={Computer Communications},
-  volume={204},
-  pages={158--171},
-  year={2023},
-  publisher={Elsevier},
-  doi={10.1016/j.comcom.2023.02.015}
+  title     = {A Blockchain-Based Data-Driven Fault-Tolerant Control System for Smart Factories in Industry 4.0},
+  author    = {Masood, Abdullah Bin and Hasan, Ammar and Vassiliou, Vasos and Lestas, Marios},
+  journal   = {Computer Communications},
+  volume    = {204},
+  pages     = {158--171},
+  year      = {2023},
+  publisher = {Elsevier},
+  doi       = {10.1016/j.comcom.2023.02.015}
 }
 ```
 
